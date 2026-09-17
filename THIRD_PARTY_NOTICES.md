@@ -6,12 +6,12 @@ The Windows executable bundles the following components. Licenses as declared by
 
 | Model | Source | License |
 |---|---|---|
-| `face_detection_yunet_2023mar.onnx` | [OpenCV Model Zoo – YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) | MIT |
-| `object_tracking_vittrack_2023sep.onnx` | [OpenCV Model Zoo – VitTrack](https://github.com/opencv/opencv_zoo/tree/main/models/object_tracking_vittrack) | Apache 2.0 |
+| `face_detection_yunet_2023mar.onnx` | [OpenCV Model Zoo: YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) | MIT |
+| `object_tracking_vittrack_2023sep.onnx` | [OpenCV Model Zoo: VitTrack](https://github.com/opencv/opencv_zoo/tree/main/models/object_tracking_vittrack) | Apache 2.0 |
 
 YuNet's authors ask to be cited when it is used:
 
-> Wu, Wei and Peng, Hanyang and Yu, Shiqi. *YuNet: A Tiny Millisecond-level Face Detector.* Machine Intelligence Research 20(5), 656–665, 2023.
+> Wu, Wei and Peng, Hanyang and Yu, Shiqi. *YuNet: A Tiny Millisecond-level Face Detector.* Machine Intelligence Research 20(5), 656-665, 2023.
 
 ## Python packages
 

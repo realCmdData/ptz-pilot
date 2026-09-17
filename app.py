@@ -1,4 +1,4 @@
-"""PTZ Pilot – a hands-free camera operator for UVC pan/tilt/zoom webcams."""
+"""PTZ Pilot: a hands-free camera operator for UVC pan/tilt/zoom webcams."""
 import ctypes
 import json
 import os
@@ -15,6 +15,7 @@ from PIL import Image, ImageTk
 
 import autostart
 import dshow
+import hotkeys
 import outputs
 import tracker
 import usage
@@ -47,6 +48,11 @@ FEED_CLEAN, FEED_BOXES = outputs.FEEDS
 START_POSITION = {dshow.PAN: 0, dshow.TILT: 0, dshow.ZOOM: 0}
 PARK_POSITION = {dshow.PAN: 90, dshow.TILT: -90, dshow.ZOOM: 0}
 PARK_DELAYS = {"30 s": 30, "1 min": 60, "5 min": 300, "15 min": 900}
+KEY_ACTIONS = (("pan_left", "Turn left"), ("pan_right", "Turn right"), ("tilt_up", "Tilt up"),
+               ("tilt_down", "Tilt down"), ("zoom_in", "Zoom in"), ("zoom_out", "Zoom out"),
+               ("follow", "Follow me on/off"))
+DEFAULT_KEYS = {"pan_left": "Left", "pan_right": "Right", "tilt_up": "Up", "tilt_down": "Down",
+                "zoom_in": "Plus", "zoom_out": "Minus", "follow": "T"}
 
 
 def load_config():
@@ -94,8 +100,13 @@ class VideoSource:
                 cap.release()
                 self.frame = None
                 self.busy = True
-                self.status = ("Another app (OBS, Teams, …) is using the camera picture. "
-                               "Close it to see the picture here – moving the camera still works.")
+                others = usage.apps_using_webcam()
+                if others:
+                    self.status = (f"{', '.join(sorted(set(others)))} is using the camera picture. "
+                                   "Close it to see the picture here. Moving the camera still works.")
+                else:
+                    self.status = ("Can't open the camera picture. No other app seems to be using it, so try "
+                                   "unplugging the camera and plugging it back in.")
                 for _ in range(30):
                     if self._stop:
                         return
@@ -126,7 +137,7 @@ class VideoSource:
             cap.release()
             self.frame = None
             if not self._stop:
-                self.status = "Lost the camera picture – reconnecting…"
+                self.status = "Lost the camera picture, reconnecting…"
 
 
 class DetectionWorker:
@@ -197,7 +208,9 @@ class App:
         self.calibrating = False
         self._events = queue.Queue()     # callbacks from worker threads, run on the Tk thread
         self._manual = {}                # prop -> direction of a held button/key
-        self._key_stop_jobs = {}
+        self.hotkeys = hotkeys.KeyboardHook(
+            lambda pressed, action, first: self._events.put(lambda: self._hotkey(pressed, action, first)))
+        self._load_keys()
         self._photo = None
         self._preview_size = (960, 540)
         self._view_rect = (0, 0, 1, 1)
@@ -212,6 +225,10 @@ class App:
         self._idle_since = None
         self._last_manual = 0.0
         self._need_picture_until = 0.0
+        self._last_device_scan = 0.0
+        self._last_reconnect = 0.0
+        self._control_ready = False
+        self._user_picked_device = False
 
         root.title(APP_NAME)
         root.geometry(self.cfg.get("geometry", "1360x820"))
@@ -247,7 +264,8 @@ class App:
         self.device_var = tk.StringVar()
         self.device_combo = ttk.Combobox(top, textvariable=self.device_var, state="readonly", width=30)
         self.device_combo.pack(side=tk.LEFT, padx=4)
-        self.device_combo.bind("<<ComboboxSelected>>", lambda e: self.connect(self.device_combo.current()))
+        self.device_combo.bind("<<ComboboxSelected>>", lambda e: (setattr(self, "_user_picked_device", True),
+                                                                  self.connect(self.device_combo.current())))
         ttk.Button(top, text="Search again", command=self.refresh_devices).pack(side=tk.LEFT, padx=2)
         ttk.Button(top, text="Camera settings…", command=self.open_driver_dialog).pack(side=tk.LEFT, padx=2)
         self.tracking_var = tk.BooleanVar(value=False)
@@ -286,20 +304,25 @@ class App:
         self.move_tab = ttk.Frame(self.tabs, padding=10)
         self.follow_tab = ttk.Frame(self.tabs, padding=10)
         self.share_tab = ttk.Frame(self.tabs, padding=10)
+        self.keys_tab = ttk.Frame(self.tabs, padding=10)
         self.picture_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(self.move_tab, text="  Move  ")
         self.tabs.add(self.follow_tab, text="  Follow  ")
         self.tabs.add(self.share_tab, text="  Share  ")
+        self.tabs.add(self.keys_tab, text="  Keys  ")
         self._build_move_tab()
         self._build_follow_tab()
         self._build_share_tab()
+        self._build_keys_tab()
 
     def _refresh_follow_button(self):
+        key = self._key_text("follow")
+        key = f"  ({key})" if key else ""
         if self.tracking_var.get():
-            self.follow_btn.configure(text="●  Following  (T)", bg="#2e7d32", fg="white",
+            self.follow_btn.configure(text=f"●  Following{key}", bg="#2e7d32", fg="white",
                                       activebackground="#1b5e20", activeforeground="white")
         else:
-            self.follow_btn.configure(text="○  Follow me  (T)", bg="#dcdcdc", fg="#222",
+            self.follow_btn.configure(text=f"○  Follow me{key}", bg="#dcdcdc", fg="#222",
                                       activebackground="#c8c8c8", activeforeground="#222")
 
     def _build_move_tab(self):
@@ -326,10 +349,8 @@ class App:
 
         self.position_label = ttk.Label(tab, text="", style="Hint.TLabel")
         self.position_label.pack(pady=(8, 0))
-        ttk.Label(tab, text="Keyboard: arrow keys to turn, + and − to zoom.\n"
-                            "On the picture: click to aim there, scroll to zoom.\n"
-                            "⌂ returns to the start position.",
-                  style="Hint.TLabel", justify=tk.LEFT).pack(anchor=tk.W, pady=(10, 12))
+        self.keys_hint = ttk.Label(tab, text="", style="Hint.TLabel", justify=tk.LEFT, wraplength=350)
+        self.keys_hint.pack(anchor=tk.W, pady=(10, 12))
 
         park = ttk.LabelFrame(tab, text="Parking", padding=8)
         park.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
@@ -347,7 +368,7 @@ class App:
         self.park_status = ttk.Label(park, text="", style="Hint.TLabel", wraplength=340)
         self.park_status.pack(anchor=tk.W, pady=(6, 0))
 
-        saved = ttk.LabelFrame(tab, text="Saved positions  (keys 1–9)", padding=8)
+        saved = ttk.LabelFrame(tab, text="Saved positions  (keys 1 to 9)", padding=8)
         saved.pack(fill=tk.BOTH, expand=True)
         self.preset_list = tk.Listbox(saved, height=5, activestyle="none", font=("Segoe UI", 10))
         self.preset_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -386,7 +407,7 @@ class App:
                         command=lambda: self._follow_changed("boxes", self.boxes_var.get())).pack(anchor=tk.W,
                                                                                                pady=(14, 0))
         ttk.Separator(tab).pack(fill=tk.X, pady=12)
-        self.track_status = tk.StringVar(value="Off – press “Follow me” to start")
+        self.track_status = tk.StringVar(value="Off. Press “Follow me” to start")
         ttk.Label(tab, textvariable=self.track_status, style="Status.TLabel", wraplength=350).pack(anchor=tk.W)
         ttk.Button(tab, text="Camera turns the wrong way? Check directions again",
                    command=self.calibrate).pack(anchor=tk.W, pady=(14, 0))
@@ -432,8 +453,38 @@ class App:
                               "Only this PC can open the links.",
                   style="Hint.TLabel", wraplength=340, justify=tk.LEFT).pack(anchor=tk.W, pady=(6, 0))
 
+    def _build_keys_tab(self):
+        tab = self.keys_tab
+        ttk.Label(tab, text="Keyboard shortcuts", style="Title.TLabel").pack(anchor=tk.W)
+        ttk.Label(tab, text="Hold a movement or zoom key to move the camera. To change a key, click Change "
+                            "and press the new key or key combination.",
+                  style="Hint.TLabel", wraplength=350, justify=tk.LEFT).pack(anchor=tk.W, pady=(2, 10))
+        grid = ttk.Frame(tab)
+        grid.pack(fill=tk.X)
+        grid.columnconfigure(1, weight=1)
+        self.key_labels = {}
+        for row, (action, label) in enumerate(KEY_ACTIONS):
+            ttk.Label(grid, text=label).grid(row=row, column=0, sticky=tk.W, pady=3)
+            value = ttk.Label(grid, text="", anchor=tk.W)
+            value.grid(row=row, column=1, sticky=tk.W, padx=12)
+            ttk.Button(grid, text="Change", width=8, command=lambda a=action: self._change_key(a)).grid(
+                row=row, column=2, pady=2)
+            self.key_labels[action] = value
+        self.key_status = ttk.Label(tab, text="", wraplength=350)
+        self.key_status.pack(anchor=tk.W, pady=(8, 0))
+        ttk.Button(tab, text="Reset to defaults", command=self._reset_keys).pack(anchor=tk.W, pady=(8, 0))
+
+        self.global_keys_var = tk.BooleanVar(value=self.hotkeys.global_keys)
+        ttk.Checkbutton(tab, text="Shortcuts also work when another app is in front",
+                        variable=self.global_keys_var, command=self._global_keys_changed).pack(anchor=tk.W,
+                                                                                            pady=(16, 0))
+        ttk.Label(tab, text="While this is on, the app in front doesn't receive these keys. Use combinations "
+                            "like Ctrl+Alt+Left so normal typing keeps working.",
+                  style="Hint.TLabel", wraplength=350, justify=tk.LEFT).pack(anchor=tk.W, pady=(2, 0))
+        self._refresh_keys()
+
     def _build_picture_tab(self):
-        """Focus/exposure sliders – only shown for cameras that offer them."""
+        """Focus/exposure sliders, only shown for cameras that offer them."""
         for child in self.picture_tab.winfo_children():
             child.destroy()
         props = [p for p in IMAGE_PROPS if self.control is not None and self.control.supported(p)]
@@ -471,18 +522,9 @@ class App:
                 return "break"
             return handler
 
-        s = self.framer.s
+        # movement, zoom and Follow me keys go through the configurable keyboard hook (hotkeys.py)
         r = self.root
-        keys = [("Left", dshow.PAN, lambda: -s.pan_right), ("Right", dshow.PAN, lambda: s.pan_right),
-                ("Up", dshow.TILT, lambda: s.tilt_up), ("Down", dshow.TILT, lambda: -s.tilt_up),
-                ("plus", dshow.ZOOM, lambda: 1), ("KP_Add", dshow.ZOOM, lambda: 1),
-                ("equal", dshow.ZOOM, lambda: 1), ("minus", dshow.ZOOM, lambda: -1),
-                ("KP_Subtract", dshow.ZOOM, lambda: -1)]
-        for keysym, prop, direction in keys:
-            r.bind(f"<KeyPress-{keysym}>", guarded(lambda e, p=prop, d=direction: self._key_press(p, d())))
-            r.bind(f"<KeyRelease-{keysym}>", guarded(lambda e, p=prop: self._key_release(p)))
         r.bind("<Home>", guarded(lambda e: self.go_home()))
-        r.bind("<t>", guarded(lambda e: self.toggle_follow()))
         for n in range(1, 10):
             r.bind(str(n), guarded(lambda e, n=n: self.recall_preset(n - 1)))
         r.bind("<FocusOut>", lambda e: self._stop_manual() if e.widget is r else None)
@@ -497,7 +539,7 @@ class App:
         self.device_combo["values"] = self.devices
         if not self.devices:
             self.device_var.set("")
-            self.status_var.set("No camera found – plug it in and press “Search again”")
+            self.status_var.set("No camera found. Plug it in and press “Search again”")
             return
         if not auto_connect and self.device_index is not None:
             return
@@ -540,8 +582,46 @@ class App:
         self._load_presets()
         self._tracking_toggled()
 
+    def _rescan_devices(self):
+        """Cameras come and go (unplugged, or not answering after a hiccup): keep the list current
+        and reconnect on our own instead of waiting for "Search again"."""
+        try:
+            names = dshow.list_video_devices()
+        except Exception:
+            return
+        now = time.monotonic()
+        if names != self.devices:
+            current = self.device_name
+            self.devices = names
+            self.device_combo["values"] = names
+            wanted = current or self.cfg.get("device")
+            if wanted in names:
+                if self.control is None or names.index(wanted) != self.device_index:
+                    self.connect(names.index(wanted))   # index may shift when other cameras appear
+                else:
+                    self.device_combo.current(self.device_index)
+            elif current and current not in names:
+                self.disconnect()
+                self.device_index = None
+                self.device_var.set("")
+                self.status_var.set(f"{current} was unplugged")
+            elif self.device_index is None and names:
+                index = next((i for i, n in enumerate(names)
+                              if any(p in n.lower() for p in PREFERRED_DEVICES)), 0)
+                self.connect(index)
+        elif (self.control is not None and self.control.ready and not self.control.available
+                and now - self._last_reconnect > 15):
+            self._last_reconnect = now
+            preferred = next((i for i, n in enumerate(names)
+                              if any(p in n.lower() for p in PREFERRED_DEVICES)), None)
+            if preferred is not None and preferred != self.device_index and not self._user_picked_device:
+                self.connect(preferred)      # saved camera has no controls (a virtual camera, say)
+            elif self.device_name in names:
+                self.connect(self.device_index)   # camera was not answering: try again
+
     def disconnect(self):
         self._manual.clear()
+        self._control_ready = False
         self.hub.video = None
         for worker in (self.detection, self.video, self.control):
             if worker is not None:
@@ -552,7 +632,7 @@ class App:
         if self.device_index is None:
             return
         hwnd = int(self.root.wm_frame(), 16)
-        dshow.open_property_dialog(self.device_index, hwnd, f"{self.device_name} – settings")
+        dshow.open_property_dialog(self.device_index, hwnd, f"{self.device_name} settings")
 
     # ------------------------------------------------------------ manual control
     def _manual_start(self, prop, direction):
@@ -575,19 +655,86 @@ class App:
         for prop in list(self._manual):
             self._manual_stop(prop)
 
-    def _key_press(self, prop, direction):
-        job = self._key_stop_jobs.pop(prop, None)
-        if job:
-            self.root.after_cancel(job)
-        self._manual_start(prop, direction)
+    # ------------------------------------------------------------ keyboard shortcuts
+    def _load_keys(self):
+        saved = self.cfg.get("keys", {})
+        texts = saved.get("bindings", {})
+        self.hotkeys.bindings = {}
+        for action, _ in KEY_ACTIONS:
+            text = texts.get(action, DEFAULT_KEYS[action])
+            binding = hotkeys.parse(text) if text else None
+            if text and binding is None:
+                binding = hotkeys.parse(DEFAULT_KEYS[action])
+            if binding is not None:
+                self.hotkeys.bindings[action] = binding
+        self.hotkeys.global_keys = bool(saved.get("global", False))
 
-    def _key_release(self, prop):
-        # debounce: keyboard auto-repeat may emit release/press pairs
-        job = self._key_stop_jobs.pop(prop, None)
-        if job:
-            self.root.after_cancel(job)
-        self._key_stop_jobs[prop] = self.root.after(60, lambda: (self._key_stop_jobs.pop(prop, None),
-                                                                 self._manual_stop(prop)))
+    def _save_keys(self):
+        self.cfg["keys"] = {"global": self.hotkeys.global_keys,
+                            "bindings": {a: hotkeys.format_binding(self.hotkeys.bindings.get(a)) for a, _ in KEY_ACTIONS}}
+        save_config(self.cfg)
+
+    def _key_text(self, action):
+        return hotkeys.format_binding(self.hotkeys.bindings.get(action))
+
+    def _refresh_keys(self):
+        for action, label in self.key_labels.items():
+            label.configure(text=self._key_text(action) or "Not set")
+        k = {a: self._key_text(a) or "not set" for a, _ in KEY_ACTIONS}
+        self.keys_hint.configure(
+            text=f"Keyboard: {k['pan_left']} / {k['pan_right']} / {k['tilt_up']} / {k['tilt_down']} to move, "
+                 f"{k['zoom_in']} / {k['zoom_out']} to zoom. You can change them in the Keys tab.\n"
+                 "On the picture: click to aim there, scroll to zoom.\n"
+                 "⌂ or the Home key returns to the start position.")
+        self._refresh_follow_button()
+
+    def _change_key(self, action):
+        label = dict(KEY_ACTIONS)[action]
+        self.key_status.configure(text=f"Press the new key for “{label}”. Esc cancels.")
+        self.hotkeys.capture_next(lambda binding: self._events.put(lambda: self._key_captured(action, binding)))
+
+    def _key_captured(self, action, binding):
+        if binding is None:
+            self.key_status.configure(text="Cancelled")
+            return
+        for other, bound in list(self.hotkeys.bindings.items()):
+            if bound == binding and other != action:   # one key can only do one thing
+                del self.hotkeys.bindings[other]
+                self.key_status.configure(
+                    text=f"{hotkeys.format_binding(binding)} was used for “{dict(KEY_ACTIONS)[other]}”, which is now not set.")
+                break
+        else:
+            self.key_status.configure(text=f"Saved: {hotkeys.format_binding(binding)}")
+        self.hotkeys.bindings[action] = binding
+        self._refresh_keys()
+        self._save_keys()
+
+    def _reset_keys(self):
+        self.hotkeys.bindings = {a: hotkeys.parse(t) for a, t in DEFAULT_KEYS.items()}
+        self.key_status.configure(text="Keys reset to the defaults")
+        self._refresh_keys()
+        self._save_keys()
+
+    def _global_keys_changed(self):
+        self.hotkeys.global_keys = self.global_keys_var.get()
+        self._save_keys()
+
+    def _hotkey(self, pressed, action, first):
+        if pressed and not self.hotkeys.global_keys and isinstance(
+                self.root.focus_get(), (tk.Entry, ttk.Entry, ttk.Combobox, tk.Listbox)):
+            return   # typing in a text field inside the app
+        s = self.framer.s
+        moves = {"pan_left": (dshow.PAN, -s.pan_right), "pan_right": (dshow.PAN, s.pan_right),
+                 "tilt_up": (dshow.TILT, s.tilt_up), "tilt_down": (dshow.TILT, -s.tilt_up),
+                 "zoom_in": (dshow.ZOOM, 1), "zoom_out": (dshow.ZOOM, -1)}
+        if action in moves:
+            prop, direction = moves[action]
+            if pressed:
+                self._manual_start(prop, direction)
+            else:
+                self._manual_stop(prop)
+        elif action == "follow" and pressed and first:
+            self.toggle_follow()
 
     def _hold_button(self, button, prop, direction):
         button.bind("<ButtonPress-1>", lambda e: self._manual_start(prop, direction()))
@@ -631,8 +778,8 @@ class App:
 
     def _video_needed(self):
         """Only capture the camera picture while something uses it; never while parked."""
-        if self.control is None or self.parked:
-            return False
+        if self.control is None or self.parked or not self.control.ready:
+            return False   # let the camera finish answering the control probe first
         return (self.preview_var.get() or self.tracking_var.get() or self.calibrating or self.vcam.running
                 or time.monotonic() < self._need_picture_until
                 or (self.streams.running and sum(self.streams.viewers.values()) > 0))
@@ -693,10 +840,10 @@ class App:
                 self.parked = False
                 self.framer.pause(4)
                 self._move_to(START_POSITION)
-            self.park_status.configure(text=f"In use – {use}")
+            self.park_status.configure(text=f"In use: {use}")
             return
         if self.parked:
-            self.park_status.configure(text="Parked – returns to the start position as soon as the camera is used")
+            self.park_status.configure(text="Parked. Returns to the start position as soon as the camera is used")
             return
         manual_quiet = now - self._last_manual
         if self._idle_since is None:
@@ -705,9 +852,9 @@ class App:
         if left <= 0:
             self.parked = True
             self._move_to(PARK_POSITION)
-            self.status_var.set("Camera parked – nobody is using it")
+            self.status_var.set("Camera parked because nobody is using it")
             return
-        self.park_status.configure(text=f"Nobody is using the camera – parking in {int(left) // 60}:{int(left) % 60:02d}")
+        self.park_status.configure(text=f"Nobody is using the camera, parking in {int(left) // 60}:{int(left) % 60:02d}")
 
     def _preview_click(self, event):
         if self.control is None or self.video is None or self.video.frame is None:
@@ -815,7 +962,7 @@ class App:
             self.framer.release(self.control)
         self.framer.reset()
         if not self.tracking_var.get():
-            self.track_status.set("Off – press “Follow me” to start")
+            self.track_status.set("Off. Press “Follow me” to start")
         elif self.control is not None and not self._is_calibrated() and (
                 self.control.supported(dshow.PAN) or self.control.supported(dshow.TILT)):
             self.tracking_var.set(False)
@@ -846,7 +993,7 @@ class App:
         self._stop_manual()
         self.framer.release(self.control)
         control, video, device = self.control, self.video, self.device_name
-        self.track_status.set("Checking which way the camera turns – it will move briefly…")
+        self.track_status.set("Checking which way the camera turns. It will move briefly…")
 
         def worker():
             try:
@@ -971,22 +1118,34 @@ class App:
                 zoom = self.control.ranges.get(dshow.ZOOM)
                 if zoom is not None and self.control.get(dshow.ZOOM) is not None:
                     parts.append(f"Zoom {round(100 * (self.control.get(dshow.ZOOM) - zoom.min) / zoom.span)}%")
-                self.position_label.configure(
-                    text="    ·    ".join(parts) if parts else "This camera can't be moved by the app")
+                if parts:
+                    text = "    ·    ".join(parts)
+                elif self.control.error:
+                    text = "The camera isn't answering. Unplug it, plug it back in, then press Search again."
+                else:
+                    text = "This camera can't be moved by the app"
+                self.position_label.configure(text=text)
             if self.vcam_var.get() and not self.vcam.running:
                 self.vcam_var.set(False)   # failed to start or stopped
             self.vcam_status.configure(text=self.vcam.status)
             self.streams_status.configure(text=self.streams.status)
+            now = time.monotonic()
+            if now - self._last_device_scan > 5:
+                self._last_device_scan = now
+                self._rescan_devices()
+            if self.control is not None and self.control.available and not self._control_ready:
+                self._control_ready = True   # controls answered after the first probe: show what they offer
+                self._build_picture_tab()
             self._update_parking()
             self._sync_video()
             if self.video is not None:
                 status = self.video.status
             elif self.control is not None:
-                status = "Camera picture is off – nothing needs it right now"
+                status = "Camera picture is off because nothing needs it right now"
             else:
                 status = "No camera"
             if self.parked:
-                status = "Camera parked – nobody is using it"
+                status = "Camera parked because nobody is using it"
             if self.control is not None and self.control.error:
                 status += "   |   The camera didn't accept the last command"
             self.status_var.set(status)
@@ -998,7 +1157,7 @@ class App:
             frame = self.video.frame if self.video is not None else None
             if self.parked or not self.preview_var.get() or frame is None:
                 if self.parked:
-                    text = "Camera parked – the picture is off until the camera is used again"
+                    text = "Camera parked. The picture is off until the camera is used again"
                 elif not self.preview_var.get():
                     text = "Preview is off" + ("  (following keeps working)" if self.tracking_var.get() else "")
                 else:
@@ -1082,7 +1241,7 @@ class App:
                                 if control.supported(p))
                 lines.append(pos + (f"  zoom: {self.framer.zoom_state}" if st["tracking"] else ""))
             for i, line in enumerate(reversed(lines)):
-                text(line.replace("…", "...").replace("–", "-").replace("“", '"').replace("”", '"'),
+                text(line.replace("…", "...").replace("“", '"').replace("”", '"'),
                      (int(12 * k), h - int((14 + 24 * i) * k)), 0.55, (255, 255, 255), 1)
         return img
 
@@ -1091,6 +1250,8 @@ class App:
         self.cfg["follow"] = dict(self.follow)
         self.cfg["parking"] = {"enabled": self.park_var.get(), "delay": self.park_delay_var.get()}
         self.cfg["preview"] = self.preview_var.get()
+        self.hotkeys.stop()
+        self._save_keys()
         self.usage.stop()
         self.cfg["output"] = {"vcam": self.vcam_var.get(),
                               "vcam_feed": FEED_BOXES if self.vcam_boxes_var.get() else FEED_CLEAN,

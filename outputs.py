@@ -81,12 +81,12 @@ class VirtualCamOutput:
             import pyvirtualcam
             cam = pyvirtualcam.Camera(OUT_W, OUT_H, OUT_FPS, fmt=pyvirtualcam.PixelFormat.BGR, backend="obs")
         except Exception as exc:
-            self.status = f"Couldn't start – is OBS installed, and its own virtual camera stopped? ({exc})"
+            self.status = f"Couldn't start. Is OBS installed, and is its own virtual camera stopped? ({exc})"
             self.running = False
             return
         try:
             with cam:
-                self.status = f"On – in OBS, choose “{cam.device}”"
+                self.status = f"On. In OBS, choose “{cam.device}”"
                 while not self._stop:
                     cam.send(self.hub.frame(self.feed)[1])
                     cam.sleep_until_next_frame()
@@ -124,7 +124,7 @@ class MjpegServer:
         if not self.running:
             return "Off"
         watching = sum(self.viewers.values())
-        return f"On – {watching} watching" if watching else "On"
+        return f"On, {watching} watching" if watching else "On"
 
     def page_url(self, feed):
         return f"http://127.0.0.1:{self.port}/{SLUGS[feed]}"

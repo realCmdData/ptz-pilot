@@ -60,7 +60,7 @@ def _face_person(x, y, w, h, score):
 
 
 class OneEuroFilter:
-    """One Euro filter (Casiez, Roussel, Vogel – CHI 2012): strong smoothing while the value is
+    """One Euro filter (Casiez, Roussel, Vogel, CHI 2012): strong smoothing while the value is
     steady, little lag while it changes quickly."""
 
     def __init__(self, min_cutoff, beta, d_cutoff=1.0):
@@ -213,7 +213,7 @@ class FaceTracker:
         elif self.target is not None:
             best = max(faces, key=lambda f: _iou(f[:4], self.target), default=None)
             if best is None or _iou(best[:4], self.target) < 0.2:
-                return   # face not visible right now (turned away?) – keep tracking until UNCONFIRMED_S
+                return   # face not visible right now (turned away?), keep tracking until UNCONFIRMED_S
             choice = best
         elif not faces:
             return
@@ -333,7 +333,7 @@ class AutoFramer:
                 self._raw = None
                 self._predict_box(now)
                 self._steer(control, now, now, coasting=True)
-                return "Following – predicting movement"
+                return "Following, predicting movement"
             self.predicting = False
             self.release(control)
             if self.box is None:
@@ -346,7 +346,7 @@ class AutoFramer:
                 self._filters = self._kf = None
                 self.hits = 0
                 return "Looking for people…"
-            return "Lost sight – waiting a moment"
+            return "Lost sight, waiting a moment"
 
         self.predicting = False
         if predictive:
@@ -364,13 +364,13 @@ class AutoFramer:
             return "Paused while you move the camera"
         self._steer(control, frame_ts, now)
         if self.zoom_state in ("zooming in", "zooming out", "about to zoom in"):
-            return f"Following – {self.zoom_state}"
-        if self.zoom_state == "waiting – person near the edge":
-            return "Following – can't zoom closer, the person is near the edge of the picture"
+            return f"Following, {self.zoom_state}"
+        if self.zoom_state == "waiting: person near the edge":
+            return "Following. Can't zoom closer because the person is near the edge of the picture"
         if self.zoom_state == "at max zoom":
-            return "Following – zoomed in as far as allowed"
+            return "Following, zoomed in as far as allowed"
         if self._dir.get(dshow.PAN) or self._dir.get(dshow.TILT):
-            return "Following – turning"
+            return "Following, turning"
         return "Following"
 
     def _observe(self, target, faces):
@@ -644,9 +644,9 @@ class AutoFramer:
         elif not below_max:
             reason = "at max zoom"
         elif not fits:
-            reason = "waiting – person near the edge"
+            reason = "waiting: person near the edge"
         elif not steady or self._dir.get(dshow.PAN) or self._dir.get(dshow.TILT):
-            reason = "waiting – camera or person moving"
+            reason = "waiting: camera or person moving"
         else:
             reason = None
         if reason is not None:
@@ -703,7 +703,7 @@ def calibrate(control, video, progress=lambda msg: None):
         deadline = time.monotonic() + 3.0
         while video.frame is None or video.ts <= t:
             if time.monotonic() > deadline:
-                raise RuntimeError("no video frames – calibration needs the live picture")
+                raise RuntimeError("no video frames, calibration needs the live picture")
             time.sleep(0.02)
         return np.float32(cv2.cvtColor(cv2.resize(video.frame, size, interpolation=cv2.INTER_AREA),
                                        cv2.COLOR_BGR2GRAY))

@@ -2,73 +2,76 @@
 
 <h1 align="center">PTZ Pilot</h1>
 
-<p align="center"><b>A hands-free camera operator for USB pan/tilt/zoom webcams on Windows.</b><br>
-Move the camera, let it follow you, keep a face in a tight close-up, and hand the picture to OBS – in one small app.</p>
+<p align="center">Control a USB pan/tilt/zoom webcam on Windows and let it follow you around the room.</p>
 
----
+PTZ Pilot started as a way to steer a Yealink MB Cam12X Pro without the vendor software. It grew into a small app that moves the camera, keeps your face in frame, parks the camera when nobody needs it, and passes the picture on to OBS.
 
-## Features
+## Install
 
-- **Pan, tilt and zoom** – hold-to-move buttons, arrow keys, click the picture to aim, scroll to zoom, saved positions (keys 1–9).
-- **Follow me** – finds faces and keeps you framed: *Wide*, *Medium*, *Close* or *Face only* (an aggressive close-up that predicts where your face is going).
-- **Automatic zoom** – *Off*, *Gentle*, *Normal* or *Quick*.
-- **Parking** – when no app uses the camera, it turns away (pan 90, tilt −90, zoom 0) and the picture is switched off. It comes back as soon as the camera is needed.
-- **Share with OBS** – send the picture (optionally with tracking boxes) to *OBS Virtual Camera*, or open local browser links for an OBS Browser Source.
-- **Light on your PC** – about half a CPU core while following (measured on a Ryzen 9 9900X3D).
-- **Start with Windows** (starts minimized) and a **preview toggle**.
+1. Open the [releases page](https://github.com/realCmdData/ptz-pilot/releases) and download `PTZ-Pilot.exe` from the latest release.
+2. Put the file wherever you like and double-click it. There is no installer and you don't need Python.
+
+The exe isn't code-signed, so Windows SmartScreen may show a warning the first time. Click "More info" and then "Run anyway".
+
+Plug in the camera before you start the app. On startup the camera moves to its center position (pan 0, tilt 0, zoom 0).
+
+## What it can do
+
+- Move the camera with buttons or the keyboard, click the picture to aim at a spot, and scroll to zoom.
+- Save camera positions and jump back to them with the number keys.
+- Follow you. Pick a wide, medium or close shot, or "Face only" for a tight close-up. Zoom can adjust itself automatically.
+- Park the camera (pan 90, tilt -90, zoom 0) after a while when no app is using it. The picture switches off while it's parked, and the camera comes back as soon as something needs it.
+- Send the picture to OBS Virtual Camera, with or without the tracking boxes, or open it as a browser link.
+- Start with Windows, minimized.
+
+## Keyboard shortcuts
+
+| Action | Default key |
+|---|---|
+| Turn left / right | Left / Right |
+| Tilt up / down | Up / Down |
+| Zoom in / out | Plus / Minus |
+| Follow me on/off | T |
+| Go to the center position | Home |
+| Go to a saved position | 1 to 9 |
+
+Hold a movement or zoom key for as long as you want the camera to move. You can change the movement, zoom and Follow me keys in the Keys tab.
+
+The Keys tab also has an option to make these shortcuts work while another app is in front. While that's on, the other app won't receive those keys, so use combinations such as Ctrl+Alt+Left instead of plain arrow keys.
+
+## Using the camera in OBS, Teams or Zoom
+
+Windows lets only one app use a camera's picture at a time. If you want PTZ Pilot to follow you while another app shows the picture:
+
+1. In PTZ Pilot, open the Share tab and turn on "Send the picture to OBS Virtual Camera".
+2. In the other app, choose "OBS Virtual Camera" as the camera.
+
+OBS needs to be installed for this, and its own "Start Virtual Camera" button should stay off. Moving the camera works even while another app has the picture.
 
 ## Supported cameras
 
-Any camera that exposes pan/tilt/zoom through the standard UVC controls (DirectShow `IAMCameraControl`). Relative (continuous) movement is used when the camera offers it; otherwise it steps absolute positions.
+Any webcam that offers pan, tilt or zoom through the standard UVC camera controls should work. PTZ Pilot was built and tested with the Yealink MB Cam12X Pro, and it includes a few fixes for that camera: it never tilts above 0 even though it reports a higher limit, and its pan direction is reversed for continuous movement.
 
-Developed and tested with the **Yealink MB Cam12X Pro**. It includes a few measured quirks for that camera: it reports a tilt range up to +45 but never tilts above 0, its relative pan direction is inverted, and its motors run at a fixed speed.
+PTZ Pilot is not affiliated with Yealink.
 
-PTZ Pilot is an independent project and is not affiliated with or endorsed by Yealink.
+## How following works
 
-## Getting started
+The app looks for faces with YuNet about once a second and follows the chosen face in between with OpenCV's VitTrack tracker, which keeps the CPU use low. The face position is smoothed before the camera moves. In "Face only" mode a Kalman filter also predicts where the face is heading, so the camera can keep up with steady movement and bridge short moments where the face isn't found. The first time you turn on following, the camera moves briefly to find out which way it turns.
 
-1. Build `PTZ-Pilot.exe` (see [Building from source](#building-from-source)). The exe runs without installation or Python.
-2. Plug in the camera and start the app. It moves the camera to 0 / 0 / 0.
-3. Press **Follow me**. The first time, it briefly moves the camera to learn which way it turns.
-
-Only one app can use a camera's picture at a time. To use the camera in OBS, Teams or Zoom while PTZ Pilot follows you, turn on **Share → Send the picture to OBS Virtual Camera** and pick *OBS Virtual Camera* in the other app. Moving the camera works even while another app has the picture.
-
-## How the tracking works
-
-| Step | What | Why |
-|---|---|---|
-| Find faces | [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (OpenCV `FaceDetectorYN`), about once per second while following | small, fast face detector |
-| Follow the face | [VitTrack](https://github.com/opencv/opencv_zoo/tree/main/models/object_tracking_vittrack) (OpenCV `TrackerVit`), 15 times per second | about 4–8 ms per update instead of detecting every frame |
-| Smooth / predict | One Euro filter; in *Face only* a constant-velocity Kalman filter that separates the subject's motion from the camera's own moves | less jitter, no lag on steady motion, bridges short tracking gaps |
-| Steer | start/stop moves with latency compensation; short timed bursts when zoomed in | fixed-speed PTZ motors overshoot tight shots otherwise |
-
-Everything runs locally. The app makes no internet connections; the optional browser links only listen on `127.0.0.1`.
+Everything runs on your PC. The app doesn't connect to the internet, and the browser links only work on the same computer.
 
 ## Building from source
 
-Requirements: Windows 10/11, Python 3.10 (64-bit).
+You need Windows 10 or 11 and 64-bit Python 3.10.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-This installs the dependencies and creates `dist\PTZ-Pilot.exe` with PyInstaller. To run from source instead: `python app.py`.
+The script installs the dependencies and builds `dist\PTZ-Pilot.exe` with PyInstaller. To run the app without building, use `python app.py`.
 
-Settings are stored in `%APPDATA%\PTZ Pilot\settings.json`.
-
-| File | Purpose |
-|---|---|
-| `app.py` | user interface, parking, video on demand |
-| `dshow.py` | DirectShow/UVC camera control (COM via comtypes) |
-| `tracker.py` | face detection + tracking, framing, prediction, direction check |
-| `outputs.py` | OBS Virtual Camera output and local MJPEG links |
-| `usage.py` | detects other apps using a webcam (Windows privacy usage records) |
-| `autostart.py` | "Start with Windows" |
+Settings are saved in `%APPDATA%\PTZ Pilot\settings.json`.
 
 ## License
 
-PTZ Pilot is free software under the [GNU General Public License v3.0](LICENSE).
-
-## Third-party components
-
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+PTZ Pilot is released under the [GNU General Public License v3.0](LICENSE). The face detection and tracking models and the Python packages it uses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

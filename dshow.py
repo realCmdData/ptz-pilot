@@ -225,7 +225,13 @@ class CameraControl:
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="uvc-control")
         self._thread.start()
-        self._ready.wait(10)
+        self._ready.wait(2)   # a camera that stopped answering must not freeze the caller
+
+    @property
+    def ready(self):
+        """False while the first probe is still running. Some cameras (MB Cam12X Pro) stop
+        answering control requests when a video stream starts in the middle of the probe."""
+        return self._ready.is_set()
 
     # ------------------------------------------------------------ public API
     @property
@@ -307,10 +313,17 @@ class CameraControl:
             comtypes.CoUninitialize()
 
     def _probe(self, cam):
+        slow = 0
         for prop in CONTROL_NAMES:
+            started = time.monotonic()
             try:
                 lo, hi, step, default, caps = cam.GetRange(prop)
             except Exception:
+                # unsupported controls fail immediately; a camera that stopped answering times out
+                slow += time.monotonic() - started > 1.0
+                if slow >= 3 and not self.ranges:
+                    self.error = "The camera is not answering (USB control requests time out)"
+                    return
                 continue
             if hi > lo:
                 real_lo, real_hi = self._limits.get(prop, (None, None))
