@@ -12,9 +12,12 @@ foreach ($f in "models\face_detection_yunet_2023mar.onnx", "models\object_tracki
     if (-not (Test-Path $f)) { throw "Missing $f" }
 }
 
+& $py build_version_info.py "version_info.txt"   # not inside build\: PyInstaller --clean wipes that
+
 & $py -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name "PTZ-Pilot" `
     --icon "assets\ptz-pilot.ico" `
+    --version-file "version_info.txt" `
     --exclude-module matplotlib --exclude-module pandas --exclude-module scipy `
     --collect-all pyvirtualcam `
     --add-data "models\face_detection_yunet_2023mar.onnx;models" `

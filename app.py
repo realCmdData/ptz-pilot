@@ -19,12 +19,14 @@ import hotkeys
 import outputs
 import tracker
 import usage
+import version
 
 # OpenCV's default thread pool spreads each small detection over every core and its idle workers
 # spin: measured ~200 % of a core in 25 worker threads. Single-threaded is ~6 ms per frame.
 cv2.setNumThreads(1)
 
 APP_NAME = "PTZ Pilot"
+APP_VERSION = version.__version__
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "PTZ Pilot")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
@@ -230,7 +232,7 @@ class App:
         self._control_ready = False
         self._user_picked_device = False
 
-        root.title(APP_NAME)
+        root.title(f"{APP_NAME} {APP_VERSION}")
         root.geometry(self.cfg.get("geometry", "1360x820"))
         root.minsize(960, 640)
         try:
@@ -281,8 +283,12 @@ class App:
                         command=self._preview_toggled).pack(side=tk.RIGHT, padx=8)
 
         self.status_var = tk.StringVar(value="")
-        ttk.Label(self.root, textvariable=self.status_var, anchor=tk.W, relief=tk.SUNKEN,
-                  padding=(8, 2)).pack(side=tk.BOTTOM, fill=tk.X)
+        status_bar = ttk.Frame(self.root, relief=tk.SUNKEN)
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Label(status_bar, text=f"v{APP_VERSION}", style="Hint.TLabel",
+                  padding=(8, 2)).pack(side=tk.RIGHT)
+        ttk.Label(status_bar, textvariable=self.status_var, anchor=tk.W,
+                  padding=(8, 2)).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         body = ttk.Frame(self.root)
         body.pack(fill=tk.BOTH, expand=True)

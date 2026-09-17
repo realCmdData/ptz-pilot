@@ -72,6 +72,11 @@ The script installs the dependencies and builds `dist\PTZ-Pilot.exe` with PyInst
 
 Settings are saved in `%APPDATA%\PTZ Pilot\settings.json`.
 
+## Versions
+
+The version is shown in the window title and in the bottom right corner of the app. What changed in
+each release is listed in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 PTZ Pilot is released under the [GNU General Public License v3.0](LICENSE). The face detection and tracking models and the Python packages it uses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
