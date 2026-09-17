@@ -22,6 +22,7 @@ YuNet's authors ask to be cited when it is used:
 | [Pillow](https://python-pillow.org) | 12.2.0 | MIT-CMU |
 | [comtypes](https://github.com/enthought/comtypes) | 1.4.16 | MIT |
 | [pyvirtualcam](https://github.com/letmaik/pyvirtualcam) | 0.15.0 | GPL v2 |
+| [pystray](https://github.com/moses-palmer/pystray) | 0.19.5 | LGPL v3 |
 | [PyInstaller](https://pyinstaller.org) (build tool) | 6.22.3 | GPL v2 with bootloader exception |
 | Python / Tkinter | 3.10 | PSF License |
 

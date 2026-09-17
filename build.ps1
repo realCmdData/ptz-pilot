@@ -6,7 +6,7 @@ Set-Location $PSScriptRoot
 $py = "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
 if (-not (Test-Path $py)) { $py = "python" }
 
-& $py -m pip install --quiet opencv-python-headless pillow numpy comtypes pyvirtualcam pyinstaller
+& $py -m pip install --quiet opencv-python-headless pillow numpy comtypes pyvirtualcam pystray pyinstaller
 
 foreach ($f in "models\face_detection_yunet_2023mar.onnx", "models\object_tracking_vittrack_2023sep.onnx", "assets\ptz-pilot.ico") {
     if (-not (Test-Path $f)) { throw "Missing $f" }
@@ -20,9 +20,11 @@ foreach ($f in "models\face_detection_yunet_2023mar.onnx", "models\object_tracki
     --version-file "version_info.txt" `
     --exclude-module matplotlib --exclude-module pandas --exclude-module scipy `
     --collect-all pyvirtualcam `
+    --hidden-import pystray._win32 `
     --add-data "models\face_detection_yunet_2023mar.onnx;models" `
     --add-data "models\object_tracking_vittrack_2023sep.onnx;models" `
     --add-data "assets\ptz-pilot.ico;assets" `
+    --add-data "assets\ptz-pilot.png;assets" `
     app.py
 
 Write-Host "Built: $PSScriptRoot\dist\PTZ-Pilot.exe"

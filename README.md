@@ -22,6 +22,8 @@ Plug in the camera before you start the app. On startup the camera moves to its 
 - Follow you. Pick a wide, medium or close shot, or "Face only" for a tight close-up. Zoom can adjust itself automatically.
 - Park the camera (pan 90, tilt -90, zoom 0) after a while when no app is using it. The picture switches off while it's parked, and the camera comes back as soon as something needs it.
 - Send the picture to OBS Virtual Camera, with or without the tracking boxes, or open it as a browser link.
+- Sit in the hidden icons area of the taskbar. Closing the window can hide the app there instead of
+  quitting it, and it can start hidden. Right-click the icon for Follow me and Quit.
 - Start with Windows, minimized.
 
 ## Keyboard shortcuts

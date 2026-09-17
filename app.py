@@ -21,6 +21,11 @@ import tracker
 import usage
 import version
 
+try:
+    import tray
+except ImportError:   # pystray missing: the app still works, just without the tray icon
+    tray = None
+
 # OpenCV's default thread pool spreads each small detection over every core and its idle workers
 # spin: measured ~200 % of a core in 25 worker threads. Single-threaded is ~6 ms per frame.
 cv2.setNumThreads(1)
@@ -231,6 +236,12 @@ class App:
         self._last_reconnect = 0.0
         self._control_ready = False
         self._user_picked_device = False
+        window = self.cfg.get("window", {})
+        self.close_to_tray = bool(window.get("close_to_tray", True)) and tray is not None
+        self.start_hidden = bool(window.get("start_hidden", False)) and tray is not None
+        self.tray = None
+        self._hidden = False
+        self._told_about_tray = False
 
         root.title(f"{APP_NAME} {APP_VERSION}")
         root.geometry(self.cfg.get("geometry", "1360x820"))
@@ -248,7 +259,7 @@ class App:
         self._bind_keys()
         self.refresh_devices(auto_connect=True)
         self._restore_outputs()
-        root.protocol("WM_DELETE_WINDOW", self.on_close)
+        root.protocol("WM_DELETE_WINDOW", self._on_window_close)
         root.after(33, self._render_loop)
         root.after(30, self._tracking_loop)
         root.after(250, self._sync_loop)
@@ -275,9 +286,6 @@ class App:
                                     cursor="hand2", command=self.toggle_follow)
         self.follow_btn.pack(side=tk.RIGHT, padx=6)
         self._refresh_follow_button()
-        self.autostart_var = tk.BooleanVar(value=autostart.is_enabled())
-        ttk.Checkbutton(top, text="Start with Windows", variable=self.autostart_var,
-                        command=self._autostart_toggled).pack(side=tk.RIGHT, padx=8)
         self.preview_var = tk.BooleanVar(value=bool(self.cfg.get("preview", True)))
         ttk.Checkbutton(top, text="Preview", variable=self.preview_var,
                         command=self._preview_toggled).pack(side=tk.RIGHT, padx=8)
@@ -311,15 +319,18 @@ class App:
         self.follow_tab = ttk.Frame(self.tabs, padding=10)
         self.share_tab = ttk.Frame(self.tabs, padding=10)
         self.keys_tab = ttk.Frame(self.tabs, padding=10)
+        self.app_tab = ttk.Frame(self.tabs, padding=10)
         self.picture_tab = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(self.move_tab, text="  Move  ")
         self.tabs.add(self.follow_tab, text="  Follow  ")
         self.tabs.add(self.share_tab, text="  Share  ")
         self.tabs.add(self.keys_tab, text="  Keys  ")
+        self.tabs.add(self.app_tab, text="  App  ")
         self._build_move_tab()
         self._build_follow_tab()
         self._build_share_tab()
         self._build_keys_tab()
+        self._build_app_tab()
 
     def _refresh_follow_button(self):
         key = self._key_text("follow")
@@ -330,6 +341,8 @@ class App:
         else:
             self.follow_btn.configure(text=f"○  Follow me{key}", bg="#dcdcdc", fg="#222",
                                       activebackground="#c8c8c8", activeforeground="#222")
+        if self.tray is not None:
+            self.tray.refresh()   # the tray menu shows a tick next to Follow me
 
     def _build_move_tab(self):
         tab = self.move_tab
@@ -488,6 +501,34 @@ class App:
                             "like Ctrl+Alt+Left so normal typing keeps working.",
                   style="Hint.TLabel", wraplength=350, justify=tk.LEFT).pack(anchor=tk.W, pady=(2, 0))
         self._refresh_keys()
+
+    def _build_app_tab(self):
+        tab = self.app_tab
+        ttk.Label(tab, text="Windows", style="Title.TLabel").pack(anchor=tk.W)
+        self.autostart_var = tk.BooleanVar(value=autostart.is_enabled())
+        ttk.Checkbutton(tab, text="Start with Windows", variable=self.autostart_var,
+                        command=self._autostart_toggled).pack(anchor=tk.W, pady=(4, 0))
+
+        ttk.Label(tab, text="Hidden icons area", style="Title.TLabel").pack(anchor=tk.W, pady=(16, 0))
+        self.close_to_tray_var = tk.BooleanVar(value=self.close_to_tray)
+        ttk.Checkbutton(tab, text="Closing the window hides the app instead of quitting",
+                        variable=self.close_to_tray_var, command=self._tray_settings_changed).pack(anchor=tk.W,
+                                                                                                pady=(4, 0))
+        self.start_hidden_var = tk.BooleanVar(value=self.start_hidden)
+        ttk.Checkbutton(tab, text="Start hidden", variable=self.start_hidden_var,
+                        command=self._tray_settings_changed).pack(anchor=tk.W, pady=(2, 0))
+        ttk.Button(tab, text="Hide now", command=self.hide_to_tray).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Label(tab, text="The app keeps following and parking the camera while it is hidden. Its icon sits "
+                            "in the hidden icons area next to the clock: click the arrow there, then the icon, "
+                            "to open the window again. Right-click the icon for Follow me and Quit.",
+                  style="Hint.TLabel", wraplength=350, justify=tk.LEFT).pack(anchor=tk.W, pady=(8, 0))
+        if tray is None:
+            ttk.Label(tab, text="The tray icon needs the pystray package, which is missing in this build.",
+                      wraplength=350).pack(anchor=tk.W, pady=(8, 0))
+            for var in (self.close_to_tray_var, self.start_hidden_var):
+                var.set(False)
+
+        ttk.Label(tab, text=f"{APP_NAME} {APP_VERSION}", style="Hint.TLabel").pack(anchor=tk.W, pady=(24, 0))
 
     def _build_picture_tab(self):
         """Focus/exposure sliders, only shown for cameras that offer them."""
@@ -786,7 +827,8 @@ class App:
         """Only capture the camera picture while something uses it; never while parked."""
         if self.control is None or self.parked or not self.control.ready:
             return False   # let the camera finish answering the control probe first
-        return (self.preview_var.get() or self.tracking_var.get() or self.calibrating or self.vcam.running
+        return ((self.preview_var.get() and not self._hidden) or self.tracking_var.get() or self.calibrating
+                or self.vcam.running
                 or time.monotonic() < self._need_picture_until
                 or (self.streams.running and sum(self.streams.viewers.values()) > 0))
 
@@ -810,6 +852,47 @@ class App:
             self._mark_manual()
             self._move_to(START_POSITION)
         self._sync_video()
+
+    # ------------------------------------------------------------ hidden icons area (tray)
+    def _tray_settings_changed(self):
+        self.close_to_tray = self.close_to_tray_var.get()
+        self.start_hidden = self.start_hidden_var.get()
+
+    def _ensure_tray(self):
+        if tray is None:
+            return None
+        if self.tray is None:
+            self.tray = tray.TrayIcon(APP_NAME, tracker.resource_path("assets", "ptz-pilot.png"),
+                                      on_open=lambda: self._events.put(self.show_window),
+                                      on_toggle_follow=lambda: self._events.put(self.toggle_follow),
+                                      on_quit=lambda: self._events.put(self.quit_app),
+                                      is_following=lambda: self.tracking_var.get())
+        self.tray.start()
+        return self.tray
+
+    def hide_to_tray(self):
+        if self._ensure_tray() is None:
+            self.root.iconify()
+            return
+        self._hidden = True
+        self.root.withdraw()
+        self._sync_video()
+        if not self._told_about_tray:
+            self._told_about_tray = True
+            self.tray.message("Still running. Click the icon to open the window again.")
+
+    def show_window(self):
+        self._hidden = False
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+        self._sync_video()
+
+    def _on_window_close(self):
+        if self.close_to_tray and tray is not None:
+            self.hide_to_tray()
+        else:
+            self.quit_app()
 
     def _autostart_toggled(self):
         try:
@@ -1252,7 +1335,10 @@ class App:
         return img
 
     # ------------------------------------------------------------ shutdown
-    def on_close(self):
+    def quit_app(self):
+        self.cfg["window"] = {"close_to_tray": self.close_to_tray, "start_hidden": self.start_hidden}
+        if self.tray is not None:
+            self.tray.stop()
         self.cfg["follow"] = dict(self.follow)
         self.cfg["parking"] = {"enabled": self.park_var.get(), "delay": self.park_delay_var.get()}
         self.cfg["preview"] = self.preview_var.get()
@@ -1282,8 +1368,10 @@ def main():
     except (AttributeError, OSError):
         pass
     root = tk.Tk()
-    App(root)
-    if autostart.STARTUP_ARG in sys.argv:   # launched at sign-in: stay out of the way
+    app = App(root)
+    if app.start_hidden:
+        app.hide_to_tray()
+    elif autostart.STARTUP_ARG in sys.argv:   # launched at sign-in: stay out of the way
         root.iconify()
     root.mainloop()
 

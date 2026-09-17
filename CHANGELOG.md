@@ -3,6 +3,13 @@
 Version numbers follow [semantic versioning](https://semver.org): the first number changes when
 something works differently than before, the second when features are added, the third for fixes.
 
+## 1.1.0
+
+- The app can sit in the hidden icons area of the taskbar. Closing the window hides it there
+  instead of quitting, and it can start hidden. Right-click its icon for Follow me and Quit.
+- New App tab with those settings and "Start with Windows", which moved out of the top bar.
+- While the app is hidden, the camera picture is only grabbed if following or an output needs it.
+
 ## 1.0.0
 
 First release.
